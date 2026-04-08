@@ -593,7 +593,7 @@
         <div class="drop-or">or</div>
         <button class="btn-upload" onclick="document.getElementById('file-input').click()">Choose a file</button>
         <div class="drop-types">Supports PDF, JPG, PNG, WebP</div>
-        <input type="file" id="file-input" accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp" style="display:none">
+        <input type="file" id="file-input" accept=".pdf,.jpg,.jpeg,.png,.webp,.mp4,.mov,.webm,.avi,.m4v,application/pdf,image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm,video/x-msvideo,video/x-m4v" style="display:none">
       </div>
       <div id="error-msg" class="error-msg hidden"></div>
     </div>
@@ -632,6 +632,15 @@
           <circle cx="7" cy="4.25" r="0.75" fill="#B45309"/>
         </svg>
         <span>PDF compression converts pages to images — text will not be selectable or searchable in the output. Keep your original if you need editable text.</span>
+      </div>
+
+      <div class="compression-note hidden" id="video-note">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+          <circle cx="7" cy="7" r="6.25" stroke="#B45309" stroke-width="1.25"/>
+          <rect x="6.375" y="6" width="1.25" height="4.5" rx="0.5" fill="#B45309"/>
+          <circle cx="7" cy="4.25" r="0.75" fill="#B45309"/>
+        </svg>
+        <span>Video compression processes in real-time, so a 2-minute video takes roughly 2 minutes. Audio is preserved. Keep your original — output format may vary by browser.</span>
       </div>
 
       <button id="shrink-btn" class="btn-shrink" onclick="startCompression()" disabled>
@@ -682,9 +691,9 @@
 
   // ── Preset parameters ──
   const PRESETS = {
-    'email-safe':    { dpi: 96,  quality: 0.55 },
-    'web-share':     { dpi: 144, quality: 0.72 },
-    'print-archive': { dpi: 200, quality: 0.85 }
+    'email-safe':    { dpi: 96,  quality: 0.55, maxHeight: 480,  videoBitrate:   800_000 },
+    'web-share':     { dpi: 144, quality: 0.72, maxHeight: 720,  videoBitrate: 2_000_000 },
+    'print-archive': { dpi: 200, quality: 0.85, maxHeight: 1080, videoBitrate: 5_000_000 }
   };
 
   // ── State ──
@@ -692,6 +701,7 @@
   let selectedPreset  = null;
   let compressedBlob  = null;
   let compressedFilename = null;
+  let compressedOutputExt = null;
 
   // ── Init ──
   setupDropZone();
@@ -718,9 +728,9 @@
 
   function handleFile(file) {
     const ext = file.name.split('.').pop().toLowerCase();
-    const accepted = ['pdf','jpg','jpeg','png','webp'];
+    const accepted = ['pdf','jpg','jpeg','png','webp','mp4','mov','webm','avi','m4v'];
     if (!accepted.includes(ext)) {
-      showError('"' + file.name + '" is not a supported file type. Please upload a PDF, JPG, PNG, or WebP.');
+      showError('"' + file.name + '" is not a supported file type. Please upload a PDF, JPG, PNG, WebP, or video file (MP4, MOV, WebM, AVI).');
       return;
     }
     clearError();
@@ -732,7 +742,9 @@
     document.getElementById('file-size-display').textContent = formatSize(file.size);
 
     // Show/hide PDF note
+    const isVideoFile = ['mp4','mov','webm','avi','m4v'].includes(ext);
     document.getElementById('pdf-note').classList.toggle('hidden', ext !== 'pdf');
+    document.getElementById('video-note').classList.toggle('hidden', !isVideoFile);
 
     // Reset preset selection
     document.querySelectorAll('.preset-card').forEach(c => c.classList.remove('active'));
@@ -742,7 +754,7 @@
   }
 
   function getFileTypeLabel(ext) {
-    const map = { pdf:'PDF', jpg:'JPEG', jpeg:'JPEG', png:'PNG', webp:'WebP' };
+    const map = { pdf:'PDF', jpg:'JPEG', jpeg:'JPEG', png:'PNG', webp:'WebP', mp4:'MP4 Video', mov:'MOV Video', webm:'WebM Video', avi:'AVI Video', m4v:'M4V Video' };
     return map[ext] || ext.toUpperCase();
   }
 
@@ -785,16 +797,21 @@
       const ext = currentFile.name.split('.').pop().toLowerCase();
       let blob;
 
+      const isVideo = ['mp4','mov','webm','avi','m4v'].includes(ext);
       if (ext === 'pdf') {
         blob = await compressPDF(currentFile, preset);
+        compressedOutputExt = 'pdf';
+      } else if (isVideo) {
+        blob = await compressVideo(currentFile, preset);
+        compressedOutputExt = blob._ext || 'webm';
       } else {
         blob = await compressImage(currentFile, preset);
+        compressedOutputExt = ext === 'png' ? 'jpg' : ext;
       }
 
       compressedBlob = blob;
       const baseName = currentFile.name.replace(/\.[^/.]+$/, '').replace(/-compressed$/i, '');
-      const outExt   = ext === 'png' ? 'jpg' : ext;
-      compressedFilename = baseName + '-compressed.' + outExt;
+      compressedFilename = baseName + '-compressed.' + compressedOutputExt;
 
       showResults(currentFile.size, blob.size);
 
@@ -874,6 +891,127 @@
     });
   }
 
+
+  // ── Video compression ──
+  async function compressVideo(file, preset) {
+    return new Promise((resolve, reject) => {
+      const video = document.createElement('video');
+      video.muted = true;
+      const objectUrl = URL.createObjectURL(file);
+      video.src = objectUrl;
+
+      video.onloadedmetadata = () => {
+        // Scale dimensions down if needed (keep even numbers for codec compatibility)
+        let w = video.videoWidth;
+        let h = video.videoHeight;
+        const maxH = preset.maxHeight;
+        if (h > maxH) {
+          w = Math.round(w * maxH / h);
+          h = maxH;
+        }
+        w = Math.round(w / 2) * 2;
+        h = Math.round(h / 2) * 2;
+
+        const canvas = document.createElement('canvas');
+        canvas.width  = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+
+        // Capture audio from video element
+        let audioTracks = [];
+        try {
+          const audioCtx = new AudioContext();
+          const source   = audioCtx.createMediaElementSource(video);
+          const dest     = audioCtx.createMediaStreamDestination();
+          source.connect(dest);
+          source.connect(audioCtx.destination);
+          audioTracks = dest.stream.getAudioTracks();
+        } catch (e) { /* no audio or not supported */ }
+
+        // Build combined stream (canvas video + audio)
+        const videoStream = canvas.captureStream(30);
+        const combinedStream = new MediaStream([
+          ...videoStream.getVideoTracks(),
+          ...audioTracks
+        ]);
+
+        // Pick best supported codec — prefer mp4 for compatibility, fall back to webm
+        const codecCandidates = [
+          'video/mp4;codecs=h264,aac',
+          'video/mp4;codecs=h264',
+          'video/mp4',
+          'video/webm;codecs=vp9,opus',
+          'video/webm;codecs=vp9',
+          'video/webm;codecs=vp8,opus',
+          'video/webm;codecs=vp8',
+          'video/webm'
+        ];
+        const mimeType = codecCandidates.find(t => MediaRecorder.isTypeSupported(t)) || 'video/webm';
+        const outExt   = mimeType.startsWith('video/mp4') ? 'mp4' : 'webm';
+
+        let recorder;
+        try {
+          recorder = new MediaRecorder(combinedStream, {
+            mimeType,
+            videoBitsPerSecond: preset.videoBitrate,
+            audioBitsPerSecond: 128_000
+          });
+        } catch (e) {
+          URL.revokeObjectURL(objectUrl);
+          return reject(new Error('MediaRecorder not supported: ' + e.message));
+        }
+
+        const chunks = [];
+        recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+
+        recorder.onstop = () => {
+          URL.revokeObjectURL(objectUrl);
+          const blob = new Blob(chunks, { type: mimeType });
+          blob._ext = outExt;
+          resolve(blob);
+        };
+
+        recorder.onerror = (e) => {
+          URL.revokeObjectURL(objectUrl);
+          reject(e.error || new Error('Recording failed'));
+        };
+
+        recorder.start(500);
+
+        const duration = video.duration;
+        let animFrame  = null;
+
+        function drawFrame() {
+          if (video.ended || video.paused) {
+            if (recorder.state !== 'inactive') recorder.stop();
+            return;
+          }
+          ctx.drawImage(video, 0, 0, w, h);
+          // Update progress text
+          const pct = duration > 0 ? Math.round((video.currentTime / duration) * 100) : 0;
+          document.getElementById('progress-text').textContent =
+            'Compressing video\u2026 ' + pct + '%';
+          animFrame = requestAnimationFrame(drawFrame);
+        }
+
+        video.onplay  = () => { animFrame = requestAnimationFrame(drawFrame); };
+        video.onended = () => { if (recorder.state !== 'inactive') recorder.stop(); };
+        video.onerror = () => {
+          if (animFrame) cancelAnimationFrame(animFrame);
+          URL.revokeObjectURL(objectUrl);
+          reject(new Error('Video playback failed'));
+        };
+
+        video.play().catch(reject);
+      };
+
+      video.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        reject(new Error('Failed to load video'));
+      };
+    });
+  }
+
   // ── Show results ──
   function showResults(originalSize, compressedSize) {
     document.getElementById('orig-size-result').textContent = formatSize(originalSize);
@@ -909,8 +1047,9 @@
   function resetTool() {
     currentFile        = null;
     selectedPreset     = null;
-    compressedBlob     = null;
-    compressedFilename = null;
+    compressedBlob      = null;
+    compressedFilename  = null;
+    compressedOutputExt = null;
     document.getElementById('file-input').value = '';
     clearError();
     showSection('upload-section');
