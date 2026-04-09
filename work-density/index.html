@@ -137,6 +137,15 @@ header {
 }
 .header-logo { height: 26px; display: block; flex-shrink: 0; }
 .header-divider { width: 1px; height: 28px; background: rgba(255,255,255,0.12); flex-shrink: 0; }
+.header-back {
+  margin-left: auto;
+  font-size: 12px; font-weight: 600;
+  color: rgba(255,255,255,0.5);
+  text-decoration: none;
+  letter-spacing: 0.3px;
+  transition: color 0.15s;
+}
+.header-back:hover { color: white; }
 .header-tool-name {
   font-family: 'CanelaText', Georgia, serif;
   font-size: 19px; font-weight: 400; color: white; line-height: 1.1;
@@ -296,6 +305,7 @@ h2 {
     <div class="header-tool-name">2025 Work <em>Density</em></div>
     <div class="header-tagline">James Beard Foundation · Marketing &amp; Communications</div>
   </div>
+  <a href="../index.html" class="header-back">← beard.io</a>
 </header>
 
 <div class="main-wrap">
